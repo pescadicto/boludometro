@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control Semáforo BLE</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 400px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 24px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        .status {
+            text-align: center;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-weight: bold;
+            background: rgba(255, 255, 255, 0.1);
+        }
+        
+        .disconnected { background-color: rgba(244, 67, 54, 0.3); }
+        .connected { background-color: rgba(76, 175, 80, 0.3); }
+        .connecting { background-color: rgba(255, 193, 7, 0.3); }
+        
+        button {
+            width: 100%;
+            padding: 15px;
+            margin: 10px 0;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: white;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .connect-btn {
+            background: linear-gradient(45deg, #2196F3, #21CBF3);
+            margin-bottom: 30px;
+        }
+        
+        .red-btn { background: linear-gradient(45deg, #f44336, #ff6b6b); }
+        .yellow-btn { background: linear-gradient(45deg, #ff9800, #ffc107); }
+        .green-btn { background: linear-gradient(45deg, #4caf50, #8bc34a); }
+        .power-btn { background: linear-gradient(45deg, #9c27b0, #e91e63); }
+        .buzzer-btn { background: linear-gradient(45deg, #607d8b, #90a4ae); }
+        
+        .button-grid {
+            display: grid;
+            gap: 15px;
+        }
+        
+        .power-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        .buzzer-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            font-size: 12px;
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚦 Semáforo Oficina</h1>
+        
+        <div id="status" class="status disconnected">
+            Desconectado
+        </div>
+        
+        <button id="connectBtn" class="connect-btn">
+            Conectar al Semáforo
+        </button>
+        
+        <div class="power-controls">
+            <button id="powerOnBtn" class="power-btn" disabled>
+                Encender
+            </button>
+            <button id="powerOffBtn" class="power-btn" disabled>
+                Apagar
+            </button>
+        </div>
+        
+        <div class="button-grid">
+            <button id="redBtn" class="red-btn" disabled>
+                🔴 Rojo
+            </button>
+            <button id="yellowBtn" class="yellow-btn" disabled>
+                🟡 Amarillo
+            </button>
+            <button id="greenBtn" class="green-btn" disabled>
+                🟢 Verde
+            </button>
+        </div>
+        
+        <div class="buzzer-controls">
+            <button id="buzzerOnBtn" class="buzzer-btn" disabled>
+                🔊 Buzzer ON
+            </button>
+            <button id="buzzerOffBtn" class="buzzer-btn" disabled>
+                🔇 Buzzer OFF
+            </button>
+        </div>
+        
+        <div class="footer">
+            Control BLE - ESP32-C3
+        </div>
+    </div>
+
+    <script>
+        let bleDevice = null;
+        let bleCharacteristic = null;
+        
+        const SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
+        const CHARACTERISTIC_UUID = '87654321-4321-4321-4321-cba987654321';
+        
+        // Elementos del DOM
+        const statusDiv = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const powerOnBtn = document.getElementById('powerOnBtn');
+        const powerOffBtn = document.getElementById('powerOffBtn');
+        const redBtn = document.getElementById('redBtn');
+        const yellowBtn = document.getElementById('yellowBtn');
+        const greenBtn = document.getElementById('greenBtn');
+        const buzzerOnBtn = document.getElementById('buzzerOnBtn');
+        const buzzerOffBtn = document.getElementById('buzzerOffBtn');
+        
+        // Verificar soporte BLE
+        if (!navigator.bluetooth) {
+            statusDiv.innerHTML = 'BLE no soportado en este navegador';
+            statusDiv.className = 'status disconnected';
+            connectBtn.disabled = true;
+        }
+        
+        // Función para conectar
+        async function connect() {
+            try {
+                statusDiv.innerHTML = 'Conectando...';
+                statusDiv.className = 'status connecting';
+                connectBtn.disabled = true;
+                
+                // Solicitar dispositivo
+                bleDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'SEMAFORO_OFICINA' }],
+                    services: [SERVICE_UUID]
+                });
+                
+                // Conectar al servidor GATT
+                const server = await bleDevice.gatt.connect();
+                
+                // Obtener servicio y característica
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+                
+                // Configurar listener para desconexión
+                bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+                
+                // Actualizar UI
+                statusDiv.innerHTML = 'Conectado ✓';
+                statusDiv.className = 'status connected';
+                connectBtn.innerHTML = 'Desconectar';
+                connectBtn.disabled = false;
+                enableControls(true);
+                
+                console.log('Conectado al semáforo BLE');
+                
+            } catch (error) {
+                console.error('Error al conectar:', error);
+                statusDiv.innerHTML = 'Error de conexión';
+                statusDiv.className = 'status disconnected';
+                connectBtn.disabled = false;
+            }
+        }
+        
+        // Función para desconectar
+        function disconnect() {
+            if (bleDevice && bleDevice.gatt.connected) {
+                bleDevice.gatt.disconnect();
+            }
+        }
+        
+        // Manejar desconexión
+        function onDisconnected() {
+            statusDiv.innerHTML = 'Desconectado';
+            statusDiv.className = 'status disconnected';
+            connectBtn.innerHTML = 'Conectar al Semáforo';
+            connectBtn.disabled = false;
+            enableControls(false);
+            bleDevice = null;
+            bleCharacteristic = null;
+        }
+        
+        // Habilitar/deshabilitar controles
+        function enableControls(enabled) {
+            powerOnBtn.disabled = !enabled;
+            powerOffBtn.disabled = !enabled;
+            redBtn.disabled = !enabled;
+            yellowBtn.disabled = !enabled;
+            greenBtn.disabled = !enabled;
+            buzzerOnBtn.disabled = !enabled;
+            buzzerOffBtn.disabled = !enabled;
+        }
+        
+        // Enviar comando BLE
+        async function sendCommand(command) {
+            if (!bleCharacteristic) {
+                alert('No conectado al semáforo');
+                return;
+            }
+            
+            try {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(command);
+                await bleCharacteristic.writeValue(data);
+                console.log('Comando enviado:', command);
+            } catch (error) {
+                console.error('Error al enviar comando:', error);
+                alert('Error al enviar comando');
+            }
+        }
+        
+        // Event listeners
+        connectBtn.addEventListener('click', () => {
+            if (bleDevice && bleDevice.gatt.connected) {
+                disconnect();
+            } else {
+                connect();
+            }
+        });
+        
+        powerOnBtn.addEventListener('click', () => sendCommand('POWER_ON'));
+        powerOffBtn.addEventListener('click', () => sendCommand('POWER_OFF'));
+        redBtn.addEventListener('click', () => sendCommand('RED'));
+        yellowBtn.addEventListener('click', () => sendCommand('YELLOW'));
+        greenBtn.addEventListener('click', () => sendCommand('GREEN'));
+        buzzerOnBtn.addEventListener('click', () => sendCommand('BUZZER_ON'));
+        buzzerOffBtn.addEventListener('click', () => sendCommand('BUZZER_OFF'));
+    </script>
+</body>
+</html>
