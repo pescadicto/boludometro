@@ -305,6 +305,7 @@
         
         // Event listeners
         connectBtn.addEventListener('click', () => {
+            addDebugMessage('🖱️ Botón conectar presionado', 'info');
             if (bleDevice && bleDevice.gatt.connected) {
                 disconnect();
             } else {
