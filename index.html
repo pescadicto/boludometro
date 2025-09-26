@@ -153,6 +153,11 @@
             </button>
         </div>
         
+        <div class="debug-log">
+            <h3>📝 Debug Log</h3>
+            <div id="debugOutput"></div>
+        </div>
+        
         <div class="footer">
             Control BLE - ESP32-C3
         </div>
@@ -175,12 +180,34 @@
         const greenBtn = document.getElementById('greenBtn');
         const buzzerOnBtn = document.getElementById('buzzerOnBtn');
         const buzzerOffBtn = document.getElementById('buzzerOffBtn');
+        const debugOutput = document.getElementById('debugOutput');
+        
+        // Función para agregar mensajes de debug
+        function addDebugMessage(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `debug-entry debug-${type}`;
+            entry.innerHTML = `<span class="debug-time">${timestamp}</span>${message}`;
+            
+            debugOutput.appendChild(entry);
+            debugOutput.scrollTop = debugOutput.scrollHeight;
+            
+            // Limitar a últimos 20 mensajes
+            if (debugOutput.children.length > 20) {
+                debugOutput.removeChild(debugOutput.firstChild);
+            }
+            
+            console.log(`[${timestamp}] ${message}`);
+        }
         
         // Verificar soporte BLE
         if (!navigator.bluetooth) {
             statusDiv.innerHTML = 'BLE no soportado en este navegador';
             statusDiv.className = 'status disconnected';
             connectBtn.disabled = true;
+            addDebugMessage('❌ Web BLE no soportado en este navegador', 'error');
+        } else {
+            addDebugMessage('✅ Web BLE disponible', 'success');
         }
         
         // Función para conectar
@@ -226,12 +253,14 @@
         // Función para desconectar
         function disconnect() {
             if (bleDevice && bleDevice.gatt.connected) {
+                addDebugMessage('🔌 Desconectando dispositivo...', 'info');
                 bleDevice.gatt.disconnect();
             }
         }
         
         // Manejar desconexión
         function onDisconnected() {
+            addDebugMessage('📡 Dispositivo desconectado', 'info');
             statusDiv.innerHTML = 'Desconectado';
             statusDiv.className = 'status disconnected';
             connectBtn.innerHTML = 'Conectar al Semáforo';
@@ -255,16 +284,20 @@
         // Enviar comando BLE
         async function sendCommand(command) {
             if (!bleCharacteristic) {
+                addDebugMessage('❌ No conectado - comando ignorado', 'error');
                 alert('No conectado al semáforo');
                 return;
             }
             
             try {
+                addDebugMessage(`📤 Enviando comando: ${command}`, 'info');
                 const encoder = new TextEncoder();
                 const data = encoder.encode(command);
                 await bleCharacteristic.writeValue(data);
-                console.log('Comando enviado:', command);
+                addDebugMessage(`✅ Comando ${command} enviado correctamente`, 'success');
             } catch (error) {
+                const errorMsg = `❌ Error enviando ${command}: ${error.message}`;
+                addDebugMessage(errorMsg, 'error');
                 console.error('Error al enviar comando:', error);
                 alert('Error al enviar comando');
             }
