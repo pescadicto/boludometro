@@ -219,7 +219,7 @@
                 
                 // Solicitar dispositivo
                 bleDevice = await navigator.bluetooth.requestDevice({
-                    filters: [{ name: 'SEMAFORO_OFICINA' }],
+                    filters: [{ name: 'SEMAFORO' }],
                     services: [SERVICE_UUID]
                 });
                 
