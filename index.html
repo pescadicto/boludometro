@@ -68,9 +68,15 @@
         }
         
         button:disabled {
-            opacity: 0.5;
+            opacity: 0.3;
             cursor: not-allowed;
             transform: none;
+        }
+        
+        button.active {
+            opacity: 1;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+            border: 2px solid rgba(255, 255, 255, 0.5);
         }
         
         .connect-btn {
@@ -197,11 +203,15 @@
     <script>
         let bleDevice = null;
         let bleCharacteristic = null;
-        let reconnectAttempts = 0;
-        const MAX_RECONNECT_ATTEMPTS = 3;
         
         const SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
         const CHARACTERISTIC_UUID = '87654321-4321-4321-4321-cba987654321';
+        
+        // Estado local sincronizado con el ESP32
+        let currentState = {
+            system: 'OFF',    // OFF, RED, YELLOW, GREEN
+            buzzer: 'OFF'     // ON, OFF
+        };
         
         // Elementos del DOM
         const statusDiv = document.getElementById('status');
@@ -225,12 +235,49 @@
             debugOutput.appendChild(entry);
             debugOutput.scrollTop = debugOutput.scrollHeight;
             
-            // Limitar a últimos 20 mensajes
             if (debugOutput.children.length > 20) {
                 debugOutput.removeChild(debugOutput.firstChild);
             }
             
             console.log(`[${timestamp}] ${message}`);
+        }
+        
+        // Actualizar UI según el estado
+        function updateUI() {
+            // Power buttons
+            powerOnBtn.classList.toggle('active', currentState.system !== 'OFF');
+            powerOffBtn.classList.toggle('active', currentState.system === 'OFF');
+            
+            // Color buttons
+            redBtn.classList.toggle('active', currentState.system === 'RED');
+            yellowBtn.classList.toggle('active', currentState.system === 'YELLOW');
+            greenBtn.classList.toggle('active', currentState.system === 'GREEN');
+            
+            // Buzzer buttons
+            buzzerOnBtn.classList.toggle('active', currentState.buzzer === 'ON');
+            buzzerOffBtn.classList.toggle('active', currentState.buzzer === 'OFF');
+        }
+        
+        // Procesar notificación de estado desde el ESP32
+        function handleStateNotification(event) {
+            const value = event.target.value;
+            const decoder = new TextDecoder();
+            const stateString = decoder.decode(value);
+            
+            addDebugMessage(`📥 Estado recibido: ${stateString}`, 'info');
+            
+            // Formato esperado: "STATE:RED,BUZZER:OFF"
+            const parts = stateString.split(',');
+            parts.forEach(part => {
+                const [key, val] = part.split(':');
+                if (key === 'STATE') {
+                    currentState.system = val;
+                } else if (key === 'BUZZER') {
+                    currentState.buzzer = val;
+                }
+            });
+            
+            updateUI();
         }
         
         // Verificar soporte BLE
@@ -251,7 +298,6 @@
                 statusDiv.className = 'status connecting';
                 connectBtn.disabled = true;
                 
-                // CORRECCIÓN: Buscar por namePrefix para ser más flexible
                 bleDevice = await navigator.bluetooth.requestDevice({
                     filters: [{ namePrefix: 'SEMAFORO' }],
                     optionalServices: [SERVICE_UUID]
@@ -259,8 +305,6 @@
                 
                 addDebugMessage(`📱 Dispositivo encontrado: ${bleDevice.name}`, 'success');
                 
-                // Conectar al servidor GATT con timeout
-                addDebugMessage('🔗 Conectando al servidor GATT...', 'info');
                 const server = await Promise.race([
                     bleDevice.gatt.connect(),
                     new Promise((_, reject) => 
@@ -270,14 +314,20 @@
                 
                 addDebugMessage('✅ Servidor GATT conectado', 'success');
                 
-                // Obtener servicio y característica
-                addDebugMessage('🔍 Buscando servicio BLE...', 'info');
                 const service = await server.getPrimaryService(SERVICE_UUID);
                 addDebugMessage('✅ Servicio encontrado', 'success');
                 
-                addDebugMessage('🔍 Buscando característica...', 'info');
                 bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
                 addDebugMessage('✅ Característica encontrada', 'success');
+                
+                // Suscribirse a notificaciones
+                try {
+                    await bleCharacteristic.startNotifications();
+                    bleCharacteristic.addEventListener('characteristicvaluechanged', handleStateNotification);
+                    addDebugMessage('📡 Notificaciones activadas', 'success');
+                } catch (e) {
+                    addDebugMessage('⚠️ Notificaciones no disponibles (modo polling)', 'info');
+                }
                 
                 // Configurar listener para desconexión
                 bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
@@ -288,7 +338,9 @@
                 connectBtn.innerHTML = 'Desconectar';
                 connectBtn.disabled = false;
                 enableControls(true);
-                reconnectAttempts = 0;
+                
+                // Solicitar estado inicial
+                await sendCommand('GET_STATE');
                 
                 addDebugMessage('🎉 Conexión exitosa', 'success');
                 
@@ -302,7 +354,6 @@
                 connectBtn.disabled = false;
                 enableControls(false);
                 
-                // Limpiar referencias
                 if (bleDevice) {
                     try {
                         bleDevice.gatt.disconnect();
@@ -317,6 +368,12 @@
         function disconnect() {
             if (bleDevice && bleDevice.gatt.connected) {
                 addDebugMessage('🔌 Desconectando dispositivo...', 'info');
+                if (bleCharacteristic) {
+                    try {
+                        bleCharacteristic.stopNotifications();
+                        bleCharacteristic.removeEventListener('characteristicvaluechanged', handleStateNotification);
+                    } catch (e) {}
+                }
                 bleDevice.removeEventListener('gattserverdisconnected', onDisconnected);
                 bleDevice.gatt.disconnect();
                 onDisconnected();
@@ -333,6 +390,10 @@
             enableControls(false);
             bleDevice = null;
             bleCharacteristic = null;
+            
+            // Resetear estado UI
+            currentState = { system: 'OFF', buzzer: 'OFF' };
+            updateUI();
         }
         
         // Habilitar/deshabilitar controles
@@ -346,7 +407,7 @@
             buzzerOffBtn.disabled = !enabled;
         }
         
-        // Enviar comando BLE con reintentos
+        // Enviar comando BLE
         async function sendCommand(command) {
             if (!bleCharacteristic) {
                 addDebugMessage('❌ No conectado - comando ignorado', 'error');
@@ -354,7 +415,6 @@
                 return;
             }
             
-            // Verificar si aún está conectado
             if (!bleDevice.gatt.connected) {
                 addDebugMessage('❌ Conexión perdida - intente reconectar', 'error');
                 onDisconnected();
@@ -374,12 +434,14 @@
                 ]);
                 
                 addDebugMessage(`✅ Comando ${command} enviado`, 'success');
+                
+                // El estado se actualizará automáticamente por notificación
+                
             } catch (error) {
                 const errorMsg = `❌ Error enviando ${command}: ${error.message}`;
                 addDebugMessage(errorMsg, 'error');
                 console.error('Error al enviar comando:', error);
                 
-                // Si hay error de comunicación, probablemente se perdió la conexión
                 if (error.message.includes('GATT') || error.message.includes('Timeout')) {
                     addDebugMessage('⚠️ Posible pérdida de conexión', 'error');
                     onDisconnected();
